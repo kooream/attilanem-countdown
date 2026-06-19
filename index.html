@@ -73,7 +73,7 @@ canvas.cc{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:n
 <button class="sound-btn" id="sbtn" onclick="toggleSound()" aria-label="Zene be/ki">
 <svg id="sicon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
 </button>
-<span class="sound-note" id="snote">Kattints a zenéhez</span>
+<span class="sound-note" id="snote">Boci boci tarka – kattints!</span>
 </div>
 </div>
 </div>
@@ -86,8 +86,83 @@ const updateDate=()=>{const t=getT();const wd=t.toLocaleDateString('hu-HU',{week
 const onTI=v=>{const[h,m]=v.split(':').map(Number);if(!isNaN(h)&&!isNaN(m)){tH=h;tM=m;updateDate();}};
 const shift=mins=>{let tot=tH*60+tM+mins;tot=Math.max(0,Math.min(1439,tot));tH=Math.floor(tot/60);tM=tot%60;document.getElementById('ti').value=pad(tH)+':'+pad(tM);updateDate();};
 const tick=()=>{const diff=getT()-new Date();if(diff<=0){document.getElementById('cd-wrap').style.display='none';document.getElementById('arrived').style.display='block';if(!confOn)startConf();return;}document.getElementById('cd-wrap').style.display='block';document.getElementById('arrived').style.display='none';const ts=Math.floor(diff/1000);document.getElementById('d').textContent=pad(Math.floor(ts/86400));document.getElementById('h').textContent=pad(Math.floor((ts%86400)/3600));document.getElementById('m').textContent=pad(Math.floor((ts%3600)/60));document.getElementById('s').textContent=pad(ts%60);};
-const toggleSound=()=>{if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)();if(actx.state==='suspended')actx.resume();playing=!playing;if(playing)playLoop(actx);};
-const playLoop=ctx=>{if(!playing)return;const notes=[261.63,293.66,329.63,392.00,349.23,329.63,293.66,261.63],dur=0.42;notes.forEach((freq,i)=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type='triangle';o.frequency.setValueAtTime(freq,ctx.currentTime+i*dur);g.gain.setValueAtTime(0,ctx.currentTime+i*dur);g.gain.linearRampToValueAtTime(0.15,ctx.currentTime+i*dur+0.04);g.gain.linearRampToValueAtTime(0,ctx.currentTime+i*dur+dur*0.85);o.connect(g);g.connect(ctx.destination);o.start(ctx.currentTime+i*dur);o.stop(ctx.currentTime+i*dur+dur);});setTimeout(()=>playLoop(ctx),notes.length*dur*1000+500);};
+
+// Gitár szintézis: karplus-strong algoritmus
+function guitarNote(ctx, freq, when, dur) {
+  const sampleRate = ctx.sampleRate;
+  const N = Math.round(sampleRate / freq);
+  const buf = ctx.createBuffer(1, N, sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < N; i++) data[i] = Math.random() * 2 - 1;
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+
+  // Low-pass filter a karakterisztikus gitár hanghoz
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = freq * 6;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, when);
+  gain.gain.linearRampToValueAtTime(0.5, when + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+
+  // Enyhe reverb érzet: delay + feedback
+  const delay = ctx.createDelay();
+  delay.delayTime.value = 1 / freq;
+  const fbGain = ctx.createGain();
+  fbGain.gain.value = 0.97;
+
+  src.connect(lp);
+  lp.connect(delay);
+  delay.connect(fbGain);
+  fbGain.connect(delay);
+  delay.connect(gain);
+  gain.connect(ctx.destination);
+
+  src.start(when);
+  src.stop(when + dur + 0.1);
+}
+
+// Boci boci tarka dallam (C-dúr)
+// Do=261.63 Re=293.66 Mi=329.63 Fa=349.23 Sol=392.00 La=440.00 Ti=493.88 Do'=523.25
+const C=261.63,D=293.66,E=329.63,F=349.23,G=392.00,A=440.00,B=493.88,C2=523.25;
+const boci = [
+  [C,0.4],[C,0.4],[G,0.4],[G,0.4],[A,0.4],[A,0.4],[G,0.8],
+  [F,0.4],[F,0.4],[E,0.4],[E,0.4],[D,0.4],[D,0.4],[C,0.8],
+  [G,0.4],[G,0.4],[F,0.4],[F,0.4],[E,0.4],[E,0.4],[D,0.8],
+  [G,0.4],[G,0.4],[F,0.4],[F,0.4],[E,0.4],[E,0.4],[D,0.8],
+  [C,0.4],[C,0.4],[G,0.4],[G,0.4],[A,0.4],[A,0.4],[G,0.8],
+  [F,0.4],[F,0.4],[E,0.4],[E,0.4],[D,0.4],[D,0.4],[C,0.8]
+];
+
+let loopTimeout = null;
+
+function playBoci(ctx) {
+  if (!playing) return;
+  let t = ctx.currentTime + 0.05;
+  for (const [freq, dur] of boci) {
+    guitarNote(ctx, freq, t, dur * 1.1);
+    t += dur;
+  }
+  const totalDur = boci.reduce((s,[,d])=>s+d,0);
+  loopTimeout = setTimeout(() => playBoci(ctx), totalDur * 1000 + 200);
+}
+
+const muteIcon='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
+const volIcon='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+
+const toggleSound=()=>{
+  if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)();
+  if(actx.state==='suspended')actx.resume();
+  playing=!playing;
+  document.getElementById('sicon').innerHTML=playing?muteIcon:volIcon;
+  document.getElementById('snote').textContent=playing?'Boci boci tarka szól – kattints a kikapcsoláshoz':'Boci boci tarka – kattints!';
+  if(playing){playBoci(actx);}else{clearTimeout(loopTimeout);}
+};
+
 const startConf=()=>{confOn=true;const cv=document.getElementById('cc'),card=document.getElementById('card');cv.width=card.offsetWidth;cv.height=card.offsetHeight;const ctx=cv.getContext('2d'),cols=['#c4956a','#e8c9a0','#d4a574','#8b6148','#f0e6d8','#b8860b'];const parts=Array.from({length:80},()=>({x:Math.random()*cv.width,y:-20,r:3+Math.random()*6,col:cols[Math.floor(Math.random()*cols.length)],vx:(Math.random()-0.5)*2.5,vy:1.8+Math.random()*2.5,rot:Math.random()*Math.PI*2,rs:(Math.random()-0.5)*0.12}));const draw=()=>{ctx.clearRect(0,0,cv.width,cv.height);parts.forEach(p=>{ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot);ctx.fillStyle=p.col;ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r*0.5);ctx.restore();p.x+=p.vx;p.y+=p.vy;p.rot+=p.rs;if(p.y>cv.height+20){p.y=-20;p.x=Math.random()*cv.width;}});if(confOn)requestAnimationFrame(draw);};draw();};
 updateDate();tick();setInterval(tick,1000);
 </script>
