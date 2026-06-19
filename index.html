@@ -100,78 +100,130 @@ const tick = () => {
 
 let actx=null, playing=false, loopTimeout=null;
 
-function guitarNote(ctx,freq,when,dur){
-  const sr=ctx.sampleRate, N=Math.round(sr/freq);
-  const buf=ctx.createBuffer(1,N,sr), data=buf.getChannelData(0);
-  for(let i=0;i<N;i++) data[i]=Math.random()*2-1;
-  const src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
-  const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=freq*5;
-  const g=ctx.createGain();
-  g.gain.setValueAtTime(0,when);
-  g.gain.linearRampToValueAtTime(0.45,when+0.015);
-  g.gain.exponentialRampToValueAtTime(0.001,when+dur);
-  const dl=ctx.createDelay(); dl.delayTime.value=1/freq;
-  const fb=ctx.createGain(); fb.gain.value=0.96;
-  src.connect(lp); lp.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(g); g.connect(ctx.destination);
-  src.start(when); src.stop(when+dur+0.05);
+// Karplus-Strong gitár szintézis – jobb hangminőség
+function guitarNote(ctx, freq, when, dur, vol=0.5) {
+  const sr = ctx.sampleRate;
+  const N = Math.round(sr / freq);
+  const buf = ctx.createBuffer(1, sr * (dur + 0.5), sr);
+  const data = buf.getChannelData(0);
+  // Kezdeti fehér zaj burst
+  for (let i = 0; i < N; i++) data[i] = (Math.random() * 2 - 1);
+  // Karplus-Strong feedback loop
+  for (let i = N; i < data.length; i++) {
+    data[i] = 0.498 * (data[i - N] + data[i - N + 1]);
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vol, when);
+  g.gain.setValueAtTime(vol, when + dur * 0.7);
+  g.gain.linearRampToValueAtTime(0, when + dur);
+  // Enyhe EQ – melegebb hang
+  const eq = ctx.createBiquadFilter();
+  eq.type = 'peaking';
+  eq.frequency.value = 800;
+  eq.gain.value = -4;
+  eq.Q.value = 1;
+  src.connect(eq);
+  eq.connect(g);
+  g.connect(ctx.destination);
+  src.start(when);
+  src.stop(when + dur + 0.1);
 }
 
-// Boci boci tarka – HELYES dallam C-dúr
-// Bo-ci bo-ci tar-ka   = Mi Mi Re Re Do Do Re
-// se fü-le se far-ka   = Mi Mi Fa Fa Sol(h)
-// o-da me-gyünk lak-ni = Sol Sol Fa Fa Mi Mi Fa
-// a-hol te-jet kap-ni  = Mi Re Re Do(h)
-const C=261.63,D=293.66,E=329.63,F=349.23,G=392.00;
-const boci=[
-  [E,0.3],[E,0.3],[D,0.3],[D,0.3],[C,0.3],[C,0.3],[D,0.6],
-  [E,0.3],[E,0.3],[F,0.3],[F,0.3],[G,0.85],
-  [G,0.3],[G,0.3],[F,0.3],[F,0.3],[E,0.3],[E,0.3],[F,0.6],
-  [E,0.3],[D,0.3],[D,0.3],[C,0.85],
-  [E,0.3],[E,0.3],[D,0.3],[D,0.3],[C,0.3],[C,0.3],[D,0.6],
-  [E,0.3],[E,0.3],[F,0.3],[F,0.3],[G,0.85],
-  [G,0.3],[G,0.3],[F,0.3],[F,0.3],[E,0.3],[E,0.3],[F,0.6],
-  [E,0.3],[D,0.3],[D,0.3],[C,1.1]
-];
-const totalDur = boci.reduce((s,[,d])=>s+d,0);
+// Boci boci tarka – C-dúr, tab alapján ellenőrzött dallam
+// Bo - ci   bo - ci   tar  -   ka
+// G3   G3   E3   E3   D3   D3  C3(hosszú)
+// se  fü  - le   se  far  -  ka
+// E3  E3   F3   F3   G3(hosszú)
+// o  - da  me-gyünk  lak  -  ni
+// G3   G3   F3   F3   E3   E3   F3
+// a - hol  te - jet  kap  -  ni
+// E3   D3   D3   C3(hosszú)
 
-function playBoci(ctx){
+const C3=130.81, D3=146.83, E3=164.81, F3=174.61, G3=196.00;
+// Egy oktávval feljebb – természetesebb gitár regiszter
+const C=261.63, D=293.66, E=329.63, F=349.23, G=392.00;
+
+const t = 0.32; // alap tempo (negyed)
+const boci = [
+  // "Boci boci tarka"
+  [G,t],[G,t],[E,t],[E,t],[D,t],[D,t],[C,t*2],
+  // "se füle se farka"
+  [E,t],[E,t],[F,t],[F,t],[G,t*2.5],
+  // "oda megyünk lakni"
+  [G,t],[G,t],[F,t],[F,t],[E,t],[E,t],[F,t*2],
+  // "ahol tejet kapni"
+  [E,t],[D,t],[D,t],[C,t*3],
+  // 2. sor: "Boci boci tarka"
+  [G,t],[G,t],[E,t],[E,t],[D,t],[D,t],[C,t*2],
+  // "se füle se farka"
+  [E,t],[E,t],[F,t],[F,t],[G,t*2.5],
+  // "oda megyünk lakni"
+  [G,t],[G,t],[F,t],[F,t],[E,t],[E,t],[F,t*2],
+  // "ahol tejet kapni"
+  [E,t],[D,t],[D,t],[C,t*3.5]
+];
+const totalDur = boci.reduce((s,[,d])=>s+d, 0);
+
+function playBoci(ctx) {
   if(!playing) return;
-  let t=ctx.currentTime+0.05;
-  for(const[freq,dur] of boci){ guitarNote(ctx,freq,t,dur*1.1); t+=dur; }
-  loopTimeout=setTimeout(()=>playBoci(ctx), totalDur*1000+400);
+  let when = ctx.currentTime + 0.05;
+  for (const [freq, dur] of boci) {
+    guitarNote(ctx, freq, when, dur * 1.05, 0.55);
+    when += dur;
+  }
+  loopTimeout = setTimeout(() => playBoci(ctx), totalDur * 1000 + 500);
 }
 
 const muteIcon='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
 const volIcon='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
 
-function toggleSound(){
-  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
-  if(actx.state==='suspended') actx.resume();
-  playing=!playing;
-  document.getElementById('sicon').innerHTML=playing?muteIcon:volIcon;
-  document.getElementById('snote').textContent=playing?'Zene szól – katt a kikapcsoláshoz':'Zenéhez katt ide';
-  if(playing){ playBoci(actx); } else { clearTimeout(loopTimeout); }
+function toggleSound() {
+  if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if(actx.state === 'suspended') actx.resume();
+  playing = !playing;
+  document.getElementById('sicon').innerHTML = playing ? muteIcon : volIcon;
+  document.getElementById('snote').textContent = playing ? 'Zene szól – katt a kikapcsoláshoz' : 'Zenéhez katt ide';
+  if(playing) { playBoci(actx); } else { clearTimeout(loopTimeout); }
 }
 
-document.getElementById('sbtn').addEventListener('touchstart',function(e){
+document.getElementById('sbtn').addEventListener('touchstart', function(e) {
   e.preventDefault(); toggleSound();
-},{passive:false});
-document.getElementById('sbtn').addEventListener('click',function(){
+}, {passive: false});
+document.getElementById('sbtn').addEventListener('click', function() {
   if(window.matchMedia('(hover:none)').matches) return;
   toggleSound();
 });
 
-const startConf=()=>{
-  confOn=true;
-  const cv=document.getElementById('cc'), card=document.getElementById('card');
-  cv.width=card.offsetWidth; cv.height=card.offsetHeight;
-  const ctx=cv.getContext('2d'), cols=['#c4956a','#e8c9a0','#d4a574','#8b6148','#f0e6d8','#b8860b'];
-  const parts=Array.from({length:80},()=>({x:Math.random()*cv.width,y:-20,r:3+Math.random()*6,col:cols[Math.floor(Math.random()*cols.length)],vx:(Math.random()-0.5)*2.5,vy:1.8+Math.random()*2.5,rot:Math.random()*Math.PI*2,rs:(Math.random()-0.5)*0.12}));
-  const draw=()=>{ctx.clearRect(0,0,cv.width,cv.height);parts.forEach(p=>{ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot);ctx.fillStyle=p.col;ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r*0.5);ctx.restore();p.x+=p.vx;p.y+=p.vy;p.rot+=p.rs;if(p.y>cv.height+20){p.y=-20;p.x=Math.random()*cv.width;}});if(confOn)requestAnimationFrame(draw);};
+const startConf = () => {
+  confOn = true;
+  const cv = document.getElementById('cc'), card = document.getElementById('card');
+  cv.width = card.offsetWidth; cv.height = card.offsetHeight;
+  const ctx = cv.getContext('2d');
+  const cols = ['#c4956a','#e8c9a0','#d4a574','#8b6148','#f0e6d8','#b8860b'];
+  const parts = Array.from({length:80}, () => ({
+    x: Math.random()*cv.width, y: -20,
+    r: 3+Math.random()*6,
+    col: cols[Math.floor(Math.random()*cols.length)],
+    vx: (Math.random()-0.5)*2.5, vy: 1.8+Math.random()*2.5,
+    rot: Math.random()*Math.PI*2, rs: (Math.random()-0.5)*0.12
+  }));
+  const draw = () => {
+    ctx.clearRect(0,0,cv.width,cv.height);
+    parts.forEach(p => {
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+      ctx.fillStyle=p.col; ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r*0.5);
+      ctx.restore();
+      p.x+=p.vx; p.y+=p.vy; p.rot+=p.rs;
+      if(p.y > cv.height+20){p.y=-20; p.x=Math.random()*cv.width;}
+    });
+    if(confOn) requestAnimationFrame(draw);
+  };
   draw();
 };
 
-updateDate(); tick(); setInterval(tick,1000);
+updateDate(); tick(); setInterval(tick, 1000);
 </script>
 </body>
 </html>
